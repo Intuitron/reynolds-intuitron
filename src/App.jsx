@@ -741,7 +741,7 @@ const ReynoldsIntuitron = () => {
                 <input
                   type="range"
                   min="0.001"
-                  max="0.5"
+                  max="0.125"
                   step="0.001"
                   value={diameter}
                   onChange={(e) => setDiameter(parseFloat(e.target.value))}
