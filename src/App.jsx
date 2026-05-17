@@ -489,7 +489,11 @@ const ReynoldsIntuitron = () => {
 
     const gridWidth = 200;
     const gridHeight = 80;
-    const pixelsPerCell = width / gridWidth;
+    // scale = 7.5 exactly: 1500/200 = 600/80 = 7.5.
+    // Using a single scale (not separate scaleX/scaleY) because canvas dimensions
+    // are chosen so both axes map identically — cylinder renders as a true circle
+    // and all grid rows are fully visible.
+    const scale = width / gridWidth;
 
     const cylinderX = Math.floor(gridWidth * 0.25);
     const cylinderY = Math.floor(gridHeight / 2);
@@ -544,42 +548,62 @@ const ReynoldsIntuitron = () => {
       ctx.fillStyle = '#0a0f1a';
       ctx.fillRect(0, 0, width, height);
 
-      // Recompute and cache vorticity onto offscreen canvas every 2 frames
+      // Recompute and cache vorticity onto offscreen canvas every 2 frames.
+      // Bilinear interpolation: sample the vorticity grid at fractional cell
+      // coordinates for each canvas pixel, rather than filling rectangular blocks
+      // per cell. This smooths the staircase artefacts around the cylinder and
+      // ensures every canvas row maps to the correct grid row (no bottom clipping).
       if (frameCount % 2 === 0) {
+        // Pre-compute vorticity into a typed array (avoids repeated method calls)
+        const vortGrid = new Float32Array(gridWidth * gridHeight);
+        for (let gx = 0; gx < gridWidth; gx++) {
+          for (let gy = 0; gy < gridHeight; gy++) {
+            vortGrid[gx + gy * gridWidth] = lbmRef.current.getVorticity(gx, gy);
+          }
+        }
+
         const imageData = offscreenCtx.createImageData(width, height);
         const data = imageData.data;
 
-        for (let x = 0; x < gridWidth; x++) {
-          for (let y = 0; y < gridHeight; y++) {
-            const vorticity = lbmRef.current.getVorticity(x, y);
-            const vorticityMag = Math.abs(vorticity);
+        for (let py = 0; py < height; py++) {
+          for (let px = 0; px < width; px++) {
+            // Fractional grid coordinate for this canvas pixel
+            const gx = (px / width) * gridWidth;
+            const gy = (py / height) * gridHeight;
 
+            const x0 = Math.floor(gx);
+            const y0 = Math.floor(gy);
+            const x1 = x0 + 1 < gridWidth  ? x0 + 1 : x0;
+            const y1 = y0 + 1 < gridHeight ? y0 + 1 : y0;
+            const fx = gx - x0;
+            const fy = gy - y0;
+
+            // Bilinear sample — smooth transition between cells
+            const vorticity =
+              vortGrid[x0 + y0 * gridWidth] * (1 - fx) * (1 - fy) +
+              vortGrid[x1 + y0 * gridWidth] * fx       * (1 - fy) +
+              vortGrid[x0 + y1 * gridWidth] * (1 - fx) * fy       +
+              vortGrid[x1 + y1 * gridWidth] * fx       * fy;
+
+            const mag = Math.abs(vorticity);
             let r, g, b;
             if (vorticity > 0) {
-              const intensity = Math.min(1, vorticityMag * 30);
+              const intensity = Math.min(1, mag * 30);
               r = Math.floor(255 * intensity);
-              g = Math.floor(50 * intensity);
+              g = Math.floor(50  * intensity);
               b = Math.floor(255 * intensity);
             } else {
-              const intensity = Math.min(1, vorticityMag * 30);
+              const intensity = Math.min(1, mag * 30);
               r = Math.floor(150 * intensity);
               g = Math.floor(255 * intensity);
-              b = Math.floor(50 * intensity);
+              b = Math.floor(50  * intensity);
             }
 
-            for (let px = 0; px < pixelsPerCell; px++) {
-              for (let py = 0; py < pixelsPerCell; py++) {
-                const pixelX = Math.floor(x * pixelsPerCell + px);
-                const pixelY = Math.floor(y * pixelsPerCell + py);
-                if (pixelX < width && pixelY < height) {
-                  const idx = (pixelY * width + pixelX) * 4;
-                  data[idx] = r;
-                  data[idx + 1] = g;
-                  data[idx + 2] = b;
-                  data[idx + 3] = 130;
-                }
-              }
-            }
+            const idx = (py * width + px) * 4;
+            data[idx]     = r;
+            data[idx + 1] = g;
+            data[idx + 2] = b;
+            data[idx + 3] = 130;
           }
         }
         offscreenCtx.putImageData(imageData, 0, 0);
@@ -595,9 +619,9 @@ const ReynoldsIntuitron = () => {
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(
-        cylinderX * pixelsPerCell,
-        cylinderY * pixelsPerCell,
-        currentRadius * pixelsPerCell,
+        cylinderX * scale,
+        cylinderY * scale,
+        currentRadius * scale,
         0, Math.PI * 2
       );
       ctx.fill();
@@ -645,13 +669,13 @@ const ReynoldsIntuitron = () => {
 
           ctx.beginPath();
           ctx.moveTo(
-            particle.history[0].x * pixelsPerCell,
-            particle.history[0].y * pixelsPerCell
+            particle.history[0].x * scale,
+            particle.history[0].y * scale
           );
           for (let i = 1; i < particle.history.length; i++) {
             ctx.lineTo(
-              particle.history[i].x * pixelsPerCell,
-              particle.history[i].y * pixelsPerCell
+              particle.history[i].x * scale,
+              particle.history[i].y * scale
             );
           }
           ctx.stroke();
@@ -661,8 +685,8 @@ const ReynoldsIntuitron = () => {
         ctx.fillStyle = particleColor;
         ctx.beginPath();
         ctx.arc(
-          particle.x * pixelsPerCell,
-          particle.y * pixelsPerCell,
+          particle.x * scale,
+          particle.y * scale,
           2.5, 0, Math.PI * 2
         );
         ctx.fill();
@@ -784,7 +808,7 @@ const ReynoldsIntuitron = () => {
           <canvas
             ref={canvasRef}
             width={1500}
-            height={500}
+            height={600}
             style={{
               width: '100%',
               height: 'auto',
@@ -804,7 +828,7 @@ const ReynoldsIntuitron = () => {
             {Re >= 200 && 'Vortices shedding — the famous von Kármán vortex street!'}
             <br />
             <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
-              Vorticity: <span style={{ color: '#ff50ff' }}>magenta = clockwise</span>, <span style={{ color: '#96ff32' }}>lime = anti-clockwise</span>
+              Vorticity: <span style={{ color: '#ff50ff' }}>magenta = clockwise</span>, <span style={{ color: '#96ff32' }}>lime = counterclockwise</span>
             </span>
           </div>
         </div>
